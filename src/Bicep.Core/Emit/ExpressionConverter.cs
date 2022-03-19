@@ -8,7 +8,6 @@ using System.Globalization;
 using System.Linq;
 using Azure.Deployments.Core.Extensions;
 using Azure.Deployments.Expression.Expressions;
-using Bicep.Core.DataFlow;
 using Bicep.Core.Extensions;
 using Bicep.Core.Semantics;
 using Bicep.Core.Semantics.Metadata;
@@ -181,7 +180,7 @@ namespace Bicep.Core.Emit
                     // regardless if there is an index expression or not, we don't need to append replacements
                     return this;
 
-                case 1 when indexExpression != null:
+                case 1 when indexExpression is not null:
                     // TODO: Run data flow analysis on the array expression as well. (Will be needed for nested resource loops)
                     var @for = inaccessibleLocalLoops.Single();
                     var current = this;
@@ -549,9 +548,8 @@ namespace Bicep.Core.Emit
                     new JTokenExpression(i)));
         }
 
-        private static SyntaxBase DoTheThing(SemanticModel semanticModel, DeclaredResourceMetadata resource, int startingAncestorIndex)
+        private SyntaxBase DoTheThing(SemanticModel semanticModel, DeclaredResourceMetadata resource, int startingAncestorIndex)
         {
-            var dfa = new DataFlowAnalyzer(semanticModel);
             var ancestors = semanticModel.ResourceAncestors.GetAncestors(resource);
 
             SyntaxBase? rewritten = null;
@@ -559,51 +557,40 @@ namespace Bicep.Core.Emit
             {
                 var ancestor = ancestors[i];
 
-                var newContext = i < ancestors.Length - 1
-                    ? ancestors[i + 1].Resource.Symbol.NameSyntax
-                    : resource.Symbol.NameSyntax;
+                var newContext = i < ancestors.Length - 1 ? ancestors[i + 1].Resource : resource;
 
-                var inaccessibleLocals = dfa.GetInaccessibleLocalsAfterSyntaxMove(ancestor.Resource.NameSyntax, newContext);
+                var inaccessibleLocals = this.context.DataFlowAnalyzer.GetInaccessibleLocalsAfterSyntaxMove(ancestor.Resource.NameSyntax, newContext.Symbol.NameSyntax);
+                var inaccessibleLocalLoops = inaccessibleLocals.Select(local => GetEnclosingForExpression(local)).Distinct().ToList();
 
-                // TODO: Deal with loop item vars
-                var indexVariableSymbol = inaccessibleLocals.SingleOrDefault(s => s.LocalKind == LocalKind.ForExpressionIndexVariable);
-
-                // TODO: Make condition more strict (should be similar to the CreateConverter... method)
-                if (indexVariableSymbol is not null && ancestor.IndexExpression is not null)
+                switch (inaccessibleLocalLoops.Count)
                 {
-                    var replacer = new LocalVariableReplacer(semanticModel, indexVariableSymbol, ancestor.IndexExpression);
-                    rewritten = replacer.Rewrite(rewritten ?? ancestor.Resource.NameSyntax);
+                    case 0:
+                        // moving the name expression does not produce any inaccessible locals (no locals means no loops)
+                        // regardless if there is an index expression or not, we don't need to replace anything on this iteration
+                        break;
+
+                    case 1 when ancestor.IndexExpression is not null:
+                        // TODO: Run data flow analysis on the array expression as well. (Will be needed for nested resource loops)
+                        var @for = inaccessibleLocalLoops.Single();
+
+                        var replacements = inaccessibleLocals.ToDictionary(local => (Symbol)local, local => local.LocalKind switch
+                              {
+                                  LocalKind.ForExpressionIndexVariable => ancestor.IndexExpression,
+                                  LocalKind.ForExpressionItemVariable => SyntaxFactory.CreateArrayAccess(@for.Expression, ancestor.IndexExpression),
+                                  _ => throw new NotImplementedException($"Unexpected local kind '{local.LocalKind}'.")
+                              });
+
+                        var replacer = new SymbolReplacer(this.context.SemanticModel, replacements);
+                        rewritten = replacer.Rewrite(rewritten ?? ancestor.Resource.NameSyntax);
+                        break;
+
+                    default:
+                        throw new NotImplementedException("Mismatch between count of index expressions and inaccessible symbols during array access index expression rewriting.");
                 }
             }
 
             // TODO: is this condition right?
             return rewritten ?? resource.NameSyntax;
-        }
-
-        private class LocalVariableReplacer : SyntaxRewriteVisitor
-        {
-            private readonly SemanticModel semanticModel;
-            private readonly LocalVariableSymbol symbolToReplace;
-            private readonly SyntaxBase replacementSyntax;
-
-            public LocalVariableReplacer(SemanticModel semanticModel, LocalVariableSymbol symbolToReplace, SyntaxBase replacementSyntax)
-            {
-                this.semanticModel = semanticModel;
-                this.symbolToReplace = symbolToReplace;
-                this.replacementSyntax = replacementSyntax;
-            }
-
-            protected override SyntaxBase ReplaceVariableAccessSyntax(VariableAccessSyntax syntax)
-            {
-                if (this.semanticModel.GetSymbolInfo(syntax) != this.symbolToReplace)
-                {
-                    // not the symbol we need to replace
-                    // leave syntax as-is
-                    return base.ReplaceVariableAccessSyntax(syntax);
-                }
-
-                return this.replacementSyntax;
-            }
         }
 
         public LanguageExpression GetFullyQualifiedResourceName(DeclaredResourceMetadata resource)
