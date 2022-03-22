@@ -8,6 +8,7 @@ using System.Globalization;
 using System.Linq;
 using Azure.Deployments.Core.Extensions;
 using Azure.Deployments.Expression.Expressions;
+using Bicep.Core.DataFlow;
 using Bicep.Core.Extensions;
 using Bicep.Core.Semantics;
 using Bicep.Core.Semantics.Metadata;
@@ -570,6 +571,14 @@ namespace Bicep.Core.Emit
                         break;
 
                     case 1 when ancestor.IndexExpression is not null:
+                        if (rewritten is not null &&
+                            LocalSymbolDependencyVisitor.GetLocalSymbolDependencies(semanticModel, rewritten).SingleOrDefault(s => s.LocalKind == LocalKind.ForExpressionItemVariable) is { } loopItemSymbol)
+                        {
+                            // rewrite the straggler from previous iteration
+                            // TODO: Nested loops will require DFA on the ForSyntax.Expression
+                            rewritten = SymbolReplacer.Replace(semanticModel, new Dictionary<Symbol, SyntaxBase> { [loopItemSymbol] = SyntaxFactory.CreateArrayAccess(GetEnclosingForExpression(loopItemSymbol).Expression, ancestor.IndexExpression) }, rewritten);
+                        }
+
                         // TODO: Run data flow analysis on the array expression as well. (Will be needed for nested resource loops)
                         var @for = inaccessibleLocalLoops.Single();
 
@@ -580,8 +589,8 @@ namespace Bicep.Core.Emit
                                   _ => throw new NotImplementedException($"Unexpected local kind '{local.LocalKind}'.")
                               });
 
-                        var replacer = new SymbolReplacer(this.context.SemanticModel, replacements);
-                        rewritten = replacer.Rewrite(rewritten ?? ancestor.Resource.NameSyntax);
+                        rewritten = SymbolReplacer.Replace(this.context.SemanticModel, replacements, rewritten ?? ancestor.Resource.NameSyntax);                        
+
                         break;
 
                     default:

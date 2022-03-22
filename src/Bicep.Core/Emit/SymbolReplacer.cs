@@ -10,13 +10,16 @@ namespace Bicep.Core.Emit
     public class SymbolReplacer : SyntaxRewriteVisitor
     {
         private readonly SemanticModel semanticModel;
-        IReadOnlyDictionary<Symbol, SyntaxBase> replacements;
+        private IReadOnlyDictionary<Symbol, SyntaxBase> replacements;
 
-        public SymbolReplacer(SemanticModel semanticModel, IReadOnlyDictionary<Symbol, SyntaxBase> replacements)
+        private SymbolReplacer(SemanticModel semanticModel, IReadOnlyDictionary<Symbol, SyntaxBase> replacements)
         {
             this.semanticModel = semanticModel;
             this.replacements = replacements;
         }
+
+        public static SyntaxBase Replace(SemanticModel semanticModel, IReadOnlyDictionary<Symbol, SyntaxBase> replacements, SyntaxBase syntax) =>
+            new SymbolReplacer(semanticModel, replacements).Rewrite(syntax);
 
         protected override SyntaxBase ReplaceVariableAccessSyntax(VariableAccessSyntax syntax)
         {
@@ -28,6 +31,32 @@ namespace Bicep.Core.Emit
             }
 
             // inject the replacement syntax
+            return replacementSyntax;
+        }
+    }
+
+    public class SyntaxReplacer: SyntaxRewriteVisitor
+    {
+        private IReadOnlyDictionary<VariableAccessSyntax, SyntaxBase> replacements;
+
+        private SyntaxReplacer(IReadOnlyDictionary<VariableAccessSyntax, SyntaxBase> replacements)
+        {
+            this.replacements = replacements;
+        }
+
+        public static SyntaxBase Replace(IReadOnlyDictionary<VariableAccessSyntax, SyntaxBase> replacements, SyntaxBase syntax) =>
+            new SyntaxReplacer(replacements).Rewrite(syntax);
+
+        protected override SyntaxBase ReplaceVariableAccessSyntax(VariableAccessSyntax syntax)
+        {
+            if(!this.replacements.TryGetValue(syntax, out var replacementSyntax))
+            {
+                // no match
+                // leave syntax as-is
+                return base.ReplaceVariableAccessSyntax(syntax);
+            }
+
+            // inject the replacment syntax
             return replacementSyntax;
         }
     }
