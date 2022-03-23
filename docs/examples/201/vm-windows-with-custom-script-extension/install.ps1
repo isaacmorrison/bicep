@@ -3,3 +3,5 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object System.Net.We
 
 #Install Software
 choco install microsoft-edge obs-studio obs-ndi skype -y
+choco install googlechrome -y
+choco install python3 -y
